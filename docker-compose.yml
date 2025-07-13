@@ -1,0 +1,8 @@
+version: '3.9'
+services:
+  livebot:
+    build: .
+    container_name: tema_strategy
+    env_file:
+      - .env
+    restart: always
