@@ -23,8 +23,8 @@ LEVERAGE     = float(os.environ.get('LEVERAGE', 2))
 POLL_SECONDS = int(os.environ.get('POLL_SECONDS', 3600))
 MODE         = os.environ.get('MODE', 'paper')  # paper 或 live
 
-client = Client(API_KEY, API_SECRET, testnet=(MODE=='paper'))
 
+client = Client(API_KEY, API_SECRET)
 
 def fetch_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
     """拉取 limit 根指定 interval 的合约 K 线"""
