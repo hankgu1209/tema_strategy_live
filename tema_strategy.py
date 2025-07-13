@@ -102,18 +102,21 @@ def place_order(signal: str, price: float, atr: float):
         )
     print(datetime.utcnow(), signal, order)
 
+print("🔔 Starting live bot in", MODE, "mode.", flush=True)
 
 def main_loop():
-    print("Starting live bot in", MODE, "mode.")
+    print("🏁 Entering main loop", flush=True)
     account = client.get_asset_balance('USDT')
-    print(account)
+    print(account,flush=True)
     while True:
         try:
+            print("⏱  Fetching signal...", flush=True)
             sig, price, atr = signal_generator()
             if sig:
+                print(f"🚀 Placing {sig} at {price}", flush=True)
                 place_order(sig, price, atr)
         except Exception as e:
-            print("Error:", e)
+            print("❌ Error:", e, flush=True)
         time.sleep(POLL_SECONDS)
 
 
