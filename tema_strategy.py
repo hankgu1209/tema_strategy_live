@@ -105,6 +105,8 @@ def place_order(signal: str, price: float, atr: float):
 
 def main_loop():
     print("Starting live bot in", MODE, "mode.")
+    account = client.get_asset_balance('USDT')
+    print(account)
     while True:
         try:
             sig, price, atr = signal_generator()
