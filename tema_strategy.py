@@ -19,15 +19,13 @@ LOOKBACK     = int(os.environ.get('CHANNEL_PERIOD', 20))
 TP_RATIO     = float(os.environ.get('TP_RATIO', 0.02))
 SL_RATIO     = float(os.environ.get('SL_RATIO', 0.01))
 FEE_RATE     = float(os.environ.get('FEE_RATE', 0.0004))
-LEVERAGE     = float(os.environ.get('LEVERAGE', 0.01))
+LEVERAGE     = float(os.environ.get('LEVERAGE', 0.02))    # 建议 1-5 之间
 POLL_SECONDS = int(os.environ.get('POLL_SECONDS', 3600))
-MODE         = os.environ.get('MODE', 'paper')  # paper 或 live
+MODE         = os.environ.get('MODE', 'paper')         # paper 或 live
 
-
-client = Client(API_KEY, API_SECRET)
+client = Client(API_KEY, API_SECRET, testnet=(MODE == 'paper'))
 
 def fetch_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
-    """拉取 limit 根指定 interval 的合约 K 线"""
     url = 'https://fapi.binance.com/fapi/v1/klines'
     params = {'symbol': symbol, 'interval': interval, 'limit': limit}
     data = requests.get(url, params=params).json()
@@ -40,85 +38,113 @@ def fetch_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
     df[['high','low','close']] = df[['high','low','close']].astype(float)
     return df
 
-
 def compute_tema(series: pd.Series, n: int) -> pd.Series:
-    """三重指数移动平均"""
     ema1 = series.ewm(span=n, adjust=False).mean()
     ema2 = ema1.ewm(span=n, adjust=False).mean()
     ema3 = ema2.ewm(span=n, adjust=False).mean()
     return 3*(ema1 - ema2) + ema3
 
-
 def signal_generator():
-    # —— 拉 1h 和 4h 数据
-    df1 = fetch_klines(SYMBOL, INTERVAL_1H, limit=LOOKBACK*3)
-    df4 = fetch_klines(SYMBOL, INTERVAL_4H, limit=LOOKBACK*3)
+    df1 = fetch_klines(SYMBOL, INTERVAL_1H, LOOKBACK*3)
+    df4 = fetch_klines(SYMBOL, INTERVAL_4H, LOOKBACK*3)
 
-    # —— 计算 1h 指标
-    df1['tema10_1h'] = compute_tema(df1['close'], 10)
-    df1['tema80_1h'] = compute_tema(df1['close'], 80)
-    df1['atr']       = df1.ta.atr(length=14)
-    adx1 = df1.ta.adx(length=14)[f'ADX_{14}']
-    df1['adx']       = adx1
-    df1['cmo']       = df1.ta.cmo(length=14)
+    # 1h 指标
+    df1['tema10'] = compute_tema(df1['close'], 10)
+    df1['tema80'] = compute_tema(df1['close'], 80)
+    df1['atr']   = df1.ta.atr(length=14)
+    df1['adx']   = df1.ta.adx(length=14)[f"ADX_{14}"]
+    df1['cmo']   = df1.ta.cmo(length=14)
+    last1 = df1.iloc[-1]
+    st1 = 1 if last1['tema10'] > last1['tema80'] else -1
 
-    latest1 = df1.iloc[-1]
-    st_1h = 1 if latest1['tema10_1h'] > latest1['tema80_1h'] else -1
+    # 4h 指标
+    df4['tema20'] = compute_tema(df4['close'], 20)
+    df4['tema70'] = compute_tema(df4['close'], 70)
+    last4 = df4.iloc[-1]
+    st4 = 1 if last4['tema20'] > last4['tema70'] else -1
 
-    # —— 计算 4h 指标
-    df4['tema20_4h'] = compute_tema(df4['close'], 20)
-    df4['tema70_4h'] = compute_tema(df4['close'], 70)
-    latest4 = df4.iloc[-1]
-    st_4h = 1 if latest4['tema20_4h'] > latest4['tema70_4h'] else -1
-
-    # —— 汇总信号条件
-    adx = latest1['adx']
-    cmo = latest1['cmo']
-    price = latest1['close']
-    atr   = latest1['atr']
-
-    # 只有当 1h 和 4h 同向 && ADX/CMO 符合才交易
-    if st_1h == 1 and st_4h == 1 and adx > 40 and cmo > 40:
-        return 'LONG', price, atr
-    if st_1h == -1 and st_4h == -1 and adx > 40 and cmo < -40:
-        return 'SHORT', price, atr
-
+    # 汇总
+    if st1 == 1 and st4 == 1 and last1['adx'] > 40 and last1['cmo'] > 40:
+        return 'LONG', last1['close'], last1['atr']
+    if st1 == -1 and st4 == -1 and last1['adx'] > 40 and last1['cmo'] < -40:
+        return 'SHORT', last1['close'], last1['atr']
     return None, None, None
 
-
 def place_order(signal: str, price: float, atr: float):
-    size = LEVERAGE
+    qty = LEVERAGE
+    # 先市价或限价开仓
     if signal == 'LONG':
-        qty = size
-        order = client.futures_create_order(
-            symbol=SYMBOL, side='BUY', type='LIMIT', timeInForce='GTC',
-            quantity=qty, price=round(price-atr, 1)
+        resp = client.futures_create_order(
+            symbol=SYMBOL,
+            side='BUY',
+            type='MARKET',
+            quantity=qty
         )
     else:
-        qty = size
-        order = client.futures_create_order(
-            symbol=SYMBOL, side='SELL', type='LIMIT', timeInForce='GTC',
-            quantity=qty, price=round(price+atr, 1)
+        resp = client.futures_create_order(
+            symbol=SYMBOL,
+            side='SELL',
+            type='MARKET',
+            quantity=qty
         )
-    print(datetime.utcnow(), signal, order)
+    entry_price = float(resp['avgFillPrice'])
+    print(datetime.utcnow(), f"{signal} opened @ {entry_price}")
+
+    # 计算止盈/止损价
+    if signal == 'LONG':
+        tp_price = round(entry_price * (1 + TP_RATIO), 2)
+        sl_price = round(entry_price * (1 - SL_RATIO),  2)
+        # 止盈市价单
+        client.futures_create_order(
+            symbol=SYMBOL,
+            side='SELL',
+            type='TAKE_PROFIT_MARKET',
+            stopPrice=tp_price,
+            closePosition=True,
+            workingType='CONTRACT_PRICE'
+        )
+        # 止损市价单
+        client.futures_create_order(
+            symbol=SYMBOL,
+            side='SELL',
+            type='STOP_MARKET',
+            stopPrice=sl_price,
+            closePosition=True,
+            workingType='CONTRACT_PRICE'
+        )
+    else:
+        tp_price = round(entry_price * (1 - TP_RATIO), 2)
+        sl_price = round(entry_price * (1 + SL_RATIO),  2)
+        client.futures_create_order(
+            symbol=SYMBOL,
+            side='BUY',
+            type='TAKE_PROFIT_MARKET',
+            stopPrice=tp_price,
+            closePosition=True,
+            workingType='CONTRACT_PRICE'
+        )
+        client.futures_create_order(
+            symbol=SYMBOL,
+            side='BUY',
+            type='STOP_MARKET',
+            stopPrice=sl_price,
+            closePosition=True,
+            workingType='CONTRACT_PRICE'
+        )
+    print(f"  → TP @ {tp_price}, SL @ {sl_price}")
 
 print("🔔 Starting live bot in", MODE, "mode.", flush=True)
-
 def main_loop():
     print("🏁 Entering main loop", flush=True)
-    account = client.get_asset_balance('USDT')
-    print(account,flush=True)
     while True:
         try:
-            print("⏱  Fetching signal...", flush=True)
             sig, price, atr = signal_generator()
             if sig:
-                print(f"🚀 Placing {sig} at {price}", flush=True)
+                print(f"⏱ Signal: {sig} @ {price}", flush=True)
                 place_order(sig, price, atr)
         except Exception as e:
             print("❌ Error:", e, flush=True)
         time.sleep(POLL_SECONDS)
-
 
 if __name__ == '__main__':
     main_loop()
