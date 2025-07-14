@@ -19,7 +19,7 @@ LOOKBACK     = int(os.environ.get('CHANNEL_PERIOD', 20))
 TP_RATIO     = float(os.environ.get('TP_RATIO', 0.02))
 SL_RATIO     = float(os.environ.get('SL_RATIO', 0.01))
 FEE_RATE     = float(os.environ.get('FEE_RATE', 0.0004))
-LEVERAGE     = float(os.environ.get('LEVERAGE', 2))
+LEVERAGE     = float(os.environ.get('LEVERAGE', 0.01))
 POLL_SECONDS = int(os.environ.get('POLL_SECONDS', 3600))
 MODE         = os.environ.get('MODE', 'paper')  # paper 或 live
 
@@ -92,13 +92,13 @@ def place_order(signal: str, price: float, atr: float):
         qty = size
         order = client.futures_create_order(
             symbol=SYMBOL, side='BUY', type='LIMIT', timeInForce='GTC',
-            quantity=qty, price=round(price-atr, 2)
+            quantity=qty, price=round(price-atr, 1)
         )
     else:
         qty = size
         order = client.futures_create_order(
             symbol=SYMBOL, side='SELL', type='LIMIT', timeInForce='GTC',
-            quantity=qty, price=round(price+atr, 2)
+            quantity=qty, price=round(price+atr, 1)
         )
     print(datetime.utcnow(), signal, order)
 
